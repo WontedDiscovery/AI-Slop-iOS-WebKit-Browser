@@ -541,8 +541,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         web.uiDelegate = self
         web.allowsBackForwardNavigationGestures = true
         web.isFindInteractionEnabled = true
-        // 網頁延伸到螢幕上下邊緣，這裡留出頂部與底部膠囊的空間，內容不會被遮住
-        web.scrollView.contentInset = UIEdgeInsets(top: 54, left: 0, bottom: 56, right: 0)
+        // 網頁只佔據上下工具列之間的區域（見 BrowserPage.mainStack），這裡只留一點邊距
+        web.scrollView.contentInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         ContentBlocker.apply(to: web, enabled: Prefs.blockTrackers)
 
         // 下拉重新整理
@@ -1260,11 +1260,11 @@ struct SuggestionList: View {
                     row(icon: "clock", title: link.title, subtitle: link.url) { onPick(link.url) }
                 }
             }
-            .padding(.top, 56)
+            .padding(.top, 8)
             .padding(.horizontal, 16)
         }
         .scrollDismissesKeyboard(.immediately)
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .background(Color(uiColor: .systemBackground))
     }
 
     private func row(icon: String, title: String, subtitle: String?, action: @escaping () -> Void) -> some View {
@@ -1373,22 +1373,8 @@ struct BrowserPage: View {
     }
 
     private var mainStack: some View {
-        ZStack {
-            ZStack {
-                WebViewRepresentable(webView: tab.web)
-                if tab.url == nil {
-                    startPage
-                }
-            }
-            .ignoresSafeArea()
-
-            if showSuggestionList {
-                SuggestionList(query: tab.address, local: suggestions.local, remote: suggestions.remote) { picked in
-                    tab.go(picked)
-                    addressFocused = false
-                }
-            }
-
+        VStack(spacing: 0) {
+            // 上方工具列區：網址列與載入進度條（收合時換成小膠囊）
             VStack(spacing: 0) {
                 if barsHidden {
                     compactBar
@@ -1399,16 +1385,31 @@ struct BrowserPage: View {
                     .progressViewStyle(.linear)
                     .opacity(tab.isLoading ? 1 : 0)
                     .allowsHitTesting(false)
-                Spacer()
             }
             .animation(.easeInOut(duration: 0.2), value: barsHidden)
 
+            // 網頁區：只佔據上下工具列之間的空間，固定或黏附在邊緣的網頁元素也不會被工具列遮住
+            ZStack {
+                WebViewRepresentable(webView: tab.web)
+                if tab.url == nil {
+                    startPage
+                }
+                if showSuggestionList {
+                    SuggestionList(query: tab.address, local: suggestions.local, remote: suggestions.remote) { picked in
+                        tab.go(picked)
+                        addressFocused = false
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // 下方工具列區：下載提示與底部工具列（收合時隱藏）
             VStack(spacing: 8) {
-                Spacer()
                 downloadBanner
-                bottomBar
-                    .offset(y: barsHidden ? 140 : 0)
-                    .opacity(barsHidden ? 0 : 1)
+                if !barsHidden {
+                    bottomBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             .animation(.easeInOut(duration: 0.2), value: barsHidden)
             .animation(.default, value: downloads.banner)
@@ -1754,8 +1755,8 @@ struct BrowserPage: View {
             Spacer()
         }
         .padding(.horizontal, 20)
-        .padding(.top, 112)
-        .padding(.bottom, 94)
+        .padding(.top, 24)
+        .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(uiColor: .systemBackground))
     }
