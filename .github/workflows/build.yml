@@ -3,6 +3,10 @@ name: Build IPA
 on:
   workflow_dispatch:
 
+# 需要寫入權限，才能建立 Release 並附上 IPA
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -35,8 +39,13 @@ jobs:
           cp -R build/Build/Products/Release-iphoneos/Browser.app Payload/
           zip -qr Browser.ipa Payload
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: Browser-ipa
-          path: Browser.ipa
+      # 直接把 IPA 附在 Release 上：下載到的就是 Browser.ipa，不會再包一層 zip
+      - name: Publish IPA to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Browser.ipa \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Browser ${TAG}" \
+            --notes "Unsigned IPA built from commit ${GITHUB_SHA:0:7}"
