@@ -542,7 +542,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         web.allowsBackForwardNavigationGestures = true
         web.isFindInteractionEnabled = true
         // 網頁延伸到螢幕上下邊緣，這裡留出頂部與底部膠囊的空間，內容不會被遮住
-        web.scrollView.contentInset = UIEdgeInsets(top: 48, left: 0, bottom: 56, right: 0)
+        web.scrollView.contentInset = UIEdgeInsets(top: 54, left: 0, bottom: 56, right: 0)
         ContentBlocker.apply(to: web, enabled: Prefs.blockTrackers)
 
         // 下拉重新整理
@@ -1438,38 +1438,49 @@ struct BrowserPage: View {
     private var securityIcon: some View {
         if let url = tab.url, url.scheme == "http" {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 12))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.orange)
         } else if tab.isSecure {
             Image(systemName: "lock.fill")
-                .font(.system(size: 12))
+                .font(.system(size: 13, weight: .semibold))
         }
     }
 
-    // 頂部浮動膠囊：頁面選單、網址與重新整理
+    // 頂部浮動膠囊：頁面選單、網址與重新整理；編輯網址時改為「取消」，與 Safari 一致
     private var topBar: some View {
-        HStack(spacing: 6) {
-            pageMenu
+        HStack(spacing: 4) {
+            if !addressFocused {
+                pageMenu
+            }
             addressField
-            Button {
-                if addressFocused {
+            if addressFocused {
+                Button("取消") {
                     addressFocused = false
                     tab.address = currentURL
-                } else if tab.isLoading {
-                    tab.web.stopLoading()
-                } else {
-                    tab.web.reload()
                 }
-            } label: {
-                symbolImage(addressFocused || tab.isLoading ? "xmark" : "arrow.clockwise")
+                .font(.system(size: 17))
+                .foregroundStyle(.tint)
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+            } else {
+                Button {
+                    if tab.isLoading {
+                        tab.web.stopLoading()
+                    } else {
+                        tab.web.reload()
+                    }
+                } label: {
+                    symbolImage(tab.isLoading ? "xmark" : "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 6)
-        .frame(height: 38)
+        .frame(height: 44)
         .liquidGlass(in: Capsule())
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 4)
+        .animation(.easeInOut(duration: 0.2), value: addressFocused)
     }
 
     // 類似 Safari 的「aA」選單：閱讀器、文字大小、桌面版網站、尋找頁面
@@ -1541,7 +1552,7 @@ struct BrowserPage: View {
                 HStack(spacing: 4) {
                     if tab.isReader {
                         Image(systemName: "doc.plaintext")
-                            .font(.system(size: 13))
+                            .font(.system(size: 13, weight: .semibold))
                     }
                     securityIcon
                     Text(displayHost)
@@ -1595,10 +1606,10 @@ struct BrowserPage: View {
                 showTabs = true
             }
         }
-        .padding(.horizontal, 22)
+        .padding(.horizontal, 10)
         .frame(height: 44)
         .liquidGlass(in: Capsule(), interactive: true)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 16)
         .padding(.bottom, 4)
     }
 
@@ -1758,9 +1769,9 @@ struct BrowserPage: View {
 
     private func symbolImage(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 17, weight: .medium))
+            .font(.system(size: 18, weight: .medium))
             .foregroundStyle(.primary)
-            .frame(width: 40, height: 36)
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
     }
 }
