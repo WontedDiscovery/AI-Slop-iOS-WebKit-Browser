@@ -542,7 +542,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         web.allowsBackForwardNavigationGestures = true
         web.isFindInteractionEnabled = true
         // 網頁延伸到螢幕上下邊緣，這裡留出頂部與底部膠囊的空間，內容不會被遮住
-        web.scrollView.contentInset = UIEdgeInsets(top: 64, left: 0, bottom: 72, right: 0)
+        web.scrollView.contentInset = UIEdgeInsets(top: 48, left: 0, bottom: 56, right: 0)
         ContentBlocker.apply(to: web, enabled: Prefs.blockTrackers)
 
         // 下拉重新整理
@@ -1260,7 +1260,7 @@ struct SuggestionList: View {
                     row(icon: "clock", title: link.title, subtitle: link.url) { onPick(link.url) }
                 }
             }
-            .padding(.top, 72)
+            .padding(.top, 56)
             .padding(.horizontal, 16)
         }
         .scrollDismissesKeyboard(.immediately)
@@ -1466,10 +1466,10 @@ struct BrowserPage: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 6)
-        .frame(height: 48)
+        .frame(height: 38)
         .liquidGlass(in: Capsule())
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
 
     // 類似 Safari 的「aA」選單：閱讀器、文字大小、桌面版網站、尋找頁面
@@ -1596,10 +1596,10 @@ struct BrowserPage: View {
             }
         }
         .padding(.horizontal, 22)
-        .frame(height: 60)
+        .frame(height: 44)
         .liquidGlass(in: Capsule(), interactive: true)
         .padding(.horizontal, 24)
-        .padding(.bottom, 6)
+        .padding(.bottom, 4)
     }
 
     // 長按上一頁／下一頁，列出這個分頁的瀏覽紀錄
@@ -1743,8 +1743,8 @@ struct BrowserPage: View {
             Spacer()
         }
         .padding(.horizontal, 20)
-        .padding(.top, 130)
-        .padding(.bottom, 110)
+        .padding(.top, 112)
+        .padding(.bottom, 94)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(uiColor: .systemBackground))
     }
@@ -1758,9 +1758,9 @@ struct BrowserPage: View {
 
     private func symbolImage(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 20, weight: .medium))
+            .font(.system(size: 17, weight: .medium))
             .foregroundStyle(.primary)
-            .frame(width: 44, height: 44)
+            .frame(width: 40, height: 36)
             .contentShape(Rectangle())
     }
 }
