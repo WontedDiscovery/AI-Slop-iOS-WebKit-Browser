@@ -87,6 +87,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published var isLoading = false
     @Published var progress: Double = 0
     @Published var desktopMode = false
+    @Published var snapshot: UIImage?
 
     init(store: BrowserStore, isPrivate: Bool, configuration: WKWebViewConfiguration? = nil) {
         self.store = store
@@ -112,6 +113,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         let refresh = UIRefreshControl()
         refresh.addTarget(self, action: #selector(pullToRefresh(_:)), for: .valueChanged)
         web.scrollView.refreshControl = refresh
+
         observers = [
             web.observe(\.title) { [weak self] wv, _ in self?.title = wv.title ?? "新分頁" },
             web.observe(\.url) { [weak self] wv, _ in
@@ -130,12 +132,21 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         ]
     }
 
-    // 下拉重新整理
     @objc private func pullToRefresh(_ sender: UIRefreshControl) {
         if web.url == nil {
             sender.endRefreshing()
         } else {
             web.reload()
+        }
+    }
+
+    // 擷取目前畫面，作為分頁總覽的預覽圖
+    func captureSnapshot() {
+        guard url != nil else { return }
+        let config = WKSnapshotConfiguration()
+        config.snapshotWidth = NSNumber(value: 360)
+        web.takeSnapshot(with: config) { [weak self] image, _ in
+            if let image { self?.snapshot = image }
         }
     }
 
@@ -201,20 +212,26 @@ final class BrowserModel: ObservableObject {
         tabs.first(where: { $0.id == selectedID }) ?? tabs.last
     }
 
-    func addTab(url: String? = nil, isPrivate: Bool = false) {
+    @discardableResult
+    func addTab(url: String? = nil, isPrivate: Bool = false) -> BrowserTab {
         let tab = BrowserTab(store: store, isPrivate: isPrivate)
         attach(tab)
         if let url {
             tab.go(url)
         }
+        return tab
     }
 
-    func closeTabs(at offsets: IndexSet) {
-        tabs.remove(atOffsets: offsets)
-        if tabs.isEmpty {
-            addTab()
-        } else if !tabs.contains(where: { $0.id == selectedID }) {
-            selectedID = tabs.last?.id
+    // 關閉分頁，卡片會以動畫移除
+    func closeTab(_ tab: BrowserTab) {
+        guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            tabs.remove(at: index)
+            if tabs.isEmpty {
+                addTab()
+            } else if !tabs.contains(where: { $0.id == selectedID }) {
+                selectedID = tabs.last?.id
+            }
         }
     }
 
@@ -240,6 +257,7 @@ struct ContentView: View {
         if let tab = model.current {
             BrowserPage(model: model, tab: tab, store: model.store)
                 .id(tab.id)
+                .transition(.opacity)
         }
     }
 }
@@ -269,12 +287,17 @@ struct BrowserPage: View {
             addressBar
             ProgressView(value: tab.progress)
                 .opacity(tab.isLoading ? 1 : 0)
-            WebViewRepresentable(webView: tab.web)
+            ZStack {
+                WebViewRepresentable(webView: tab.web)
+                if tab.url == nil {
+                    startPage
+                }
+            }
             bottomBar
         }
         .preferredColorScheme(tab.isPrivate ? .dark : nil)
-        .sheet(isPresented: $showTabs) {
-            TabsSheet(isPresented: $showTabs, model: model)
+        .fullScreenCover(isPresented: $showTabs) {
+            TabOverview(isPresented: $showTabs, model: model, store: store)
         }
         .sheet(isPresented: $showBookmarks) {
             LinkListSheet(isPresented: $showBookmarks, title: "書籤", links: store.bookmarks,
@@ -284,6 +307,21 @@ struct BrowserPage: View {
             LinkListSheet(isPresented: $showHistory, title: "歷史紀錄", links: store.history,
                           onOpen: { tab.go($0) }, onDelete: store.deleteHistory)
         }
+    }
+
+    // 空白分頁顯示的起始頁（喜好項目）
+    private var startPage: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("喜好項目").font(.title3.bold())
+            if store.bookmarks.isEmpty {
+                Text("加入書籤後會顯示在這裡").font(.footnote).foregroundStyle(.secondary)
+            }
+            FavoritesGrid(links: store.bookmarks, iconSize: 60) { tab.go($0) }
+            Spacer()
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(uiColor: .systemBackground))
     }
 
     private var addressBar: some View {
@@ -369,7 +407,10 @@ struct BrowserPage: View {
                 Image(systemName: "book")
             }
             Spacer()
-            Button { showTabs = true } label: {
+            Button {
+                tab.captureSnapshot()
+                showTabs = true
+            } label: {
                 Image(systemName: "square.on.square")
                     .overlay(Text("\(model.tabs.count)").font(.system(size: 11, weight: .bold)))
             }
@@ -396,10 +437,14 @@ struct BrowserPage: View {
 
     private var moreMenu: some View {
         Menu {
-            Button { model.addTab() } label: {
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) { _ = model.addTab() }
+            } label: {
                 Label("新增分頁", systemImage: "plus.square")
             }
-            Button { model.addTab(isPrivate: true) } label: {
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) { _ = model.addTab(isPrivate: true) }
+            } label: {
                 Label("新增私密分頁", systemImage: "eye.slash")
             }
             if !currentURL.isEmpty {
@@ -410,7 +455,9 @@ struct BrowserPage: View {
                           systemImage: store.isBookmarked(currentURL) ? "bookmark.slash" : "bookmark")
                 }
             }
-            Button { showHistory = true } label: {
+            Button {
+                showHistory = true
+            } label: {
                 Label("歷史紀錄", systemImage: "clock")
             }
             Divider()
@@ -425,52 +472,202 @@ struct BrowserPage: View {
     }
 }
 
-struct TabsSheet: View {
+// 分頁總覽：2 欄卡片，新增與關閉都有動畫
+struct TabOverview: View {
     @Binding var isPresented: Bool
     @ObservedObject var model: BrowserModel
+    @ObservedObject var store: BrowserStore
+    @State var privateMode = false
+
+    init(isPresented: Binding<Bool>, model: BrowserModel, store: BrowserStore) {
+        _isPresented = isPresented
+        _model = ObservedObject(wrappedValue: model)
+        _store = ObservedObject(wrappedValue: store)
+    }
+
+    private var visibleTabs: [BrowserTab] {
+        model.tabs.filter { $0.isPrivate == privateMode }
+    }
+
+    private var normalCount: Int {
+        model.tabs.filter { !$0.isPrivate }.count
+    }
 
     var body: some View {
-        NavigationStack {
-            List {
-                ForEach(model.tabs) { tab in
-                    Button {
-                        model.selectedID = tab.id
-                        isPresented = false
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(tab.title).lineLimit(1)
-                                Text(tab.url?.host ?? "新分頁")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if tab.isPrivate {
-                                Image(systemName: "eye.slash")
-                                    .foregroundStyle(.secondary)
-                            }
-                            if tab.id == model.selectedID {
-                                Image(systemName: "checkmark")
-                            }
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    if visibleTabs.isEmpty {
+                        Text(privateMode ? "沒有私密分頁" : "沒有標籤頁")
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 120)
+                    }
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)],
+                              spacing: 22) {
+                        ForEach(visibleTabs) { tab in
+                            TabCard(tab: tab, favorites: store.bookmarks, onSelect: {
+                                model.selectedID = tab.id
+                                isPresented = false
+                            }, onClose: {
+                                model.closeTab(tab)
+                            })
+                            .id(tab.id)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+                    .padding(.bottom, 120)
                 }
-                .onDelete(perform: model.closeTabs)
+                bottomBar(proxy)
             }
-            .navigationTitle("分頁（\(model.tabs.count)）")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .bottomBar) {
-                    Button {
-                        model.addTab()
-                        isPresented = false
-                    } label: {
-                        Label("新增分頁", systemImage: "plus")
+            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        }
+    }
+
+    private func bottomBar(_ proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                    _ = model.addTab(isPrivate: privateMode)
+                }
+                if let id = visibleTabs.last?.id {
+                    DispatchQueue.main.async {
+                        withAnimation { proxy.scrollTo(id, anchor: .bottom) }
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { isPresented = false }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 56, height: 56)
+                    .background(.regularMaterial, in: Circle())
+            }
+
+            HStack(spacing: 0) {
+                segment("私密瀏覽", isOn: privateMode) { privateMode = true }
+                segment("\(normalCount) 個標籤頁", isOn: !privateMode) { privateMode = false }
+            }
+            .padding(4)
+            .background(.regularMaterial, in: Capsule())
+
+            Button {
+                isPresented = false
+            } label: {
+                Image(systemName: "checkmark")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(Color.blue, in: Circle())
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
+    }
+
+    private func segment(_ title: String, isOn: Bool, select: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { select() }
+        } label: {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(isOn ? Color.gray.opacity(0.35) : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// 單一分頁卡片：預覽圖、右上角關閉按鈕與標題
+struct TabCard: View {
+    @ObservedObject var tab: BrowserTab
+    let favorites: [SavedLink]
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .topTrailing) {
+                preview
+                    .frame(maxWidth: .infinity, minHeight: 260, maxHeight: 260)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onSelect)
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .background(Color.black.opacity(0.45), in: Circle())
                 }
+                .padding(8)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: tab.url == nil ? "square.grid.2x2" : "globe")
+                Text(tab.title).lineLimit(1)
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+        }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if let image = tab.snapshot {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+        } else if tab.url == nil {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("喜好項目").font(.caption.bold())
+                FavoritesGrid(links: favorites, iconSize: 36) { _ in }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color(uiColor: .secondarySystemBackground))
+        } else {
+            Text(tab.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(uiColor: .secondarySystemBackground))
+        }
+    }
+}
+
+// 喜好項目網格：以網站名稱的第一個字作為圖示
+struct FavoritesGrid: View {
+    let links: [SavedLink]
+    let iconSize: CGFloat
+    let onOpen: (String) -> Void
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 12) {
+            ForEach(links.prefix(8)) { link in
+                Button {
+                    onOpen(link.url)
+                } label: {
+                    VStack(spacing: 4) {
+                        Text(String(link.title.prefix(1)))
+                            .font(.system(size: iconSize * 0.45, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: iconSize, height: iconSize)
+                            .background(Color.gray.opacity(0.6),
+                                        in: RoundedRectangle(cornerRadius: iconSize * 0.22, style: .continuous))
+                        Text(link.title)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
             }
         }
     }
