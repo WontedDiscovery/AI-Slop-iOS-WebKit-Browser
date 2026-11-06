@@ -146,6 +146,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         web.navigationDelegate = self
         web.uiDelegate = self
         web.allowsBackForwardNavigationGestures = true
+        // 網頁延伸到螢幕上下邊緣，這裡留出頂部與底部膠囊的空間，內容不會被遮住
+        web.scrollView.contentInset = UIEdgeInsets(top: 64, left: 0, bottom: 72, right: 0)
 
         // 下拉重新整理
         let refresh = UIRefreshControl()
@@ -240,6 +242,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 final class BrowserModel: ObservableObject {
     @Published var tabs: [BrowserTab] = []
     @Published var selectedID: UUID?
+    @Published var showOverview = false
     let store = BrowserStore()
 
     init() {
@@ -326,21 +329,28 @@ struct BrowserPage: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
-            ProgressView(value: tab.progress)
-                .progressViewStyle(.linear)
-                .opacity(tab.isLoading ? 1 : 0)
+        ZStack {
             ZStack {
                 WebViewRepresentable(webView: tab.web)
                 if tab.url == nil {
                     startPage
                 }
             }
-        }
-        .overlay(alignment: .bottom) {
-            bottomBar
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                topBar
+                ProgressView(value: tab.progress)
+                    .progressViewStyle(.linear)
+                    .opacity(tab.isLoading ? 1 : 0)
+                    .allowsHitTesting(false)
+                Spacer()
+            }
+
+            VStack(spacing: 0) {
+                Spacer()
+                bottomBar
+            }
         }
         .preferredColorScheme(tab.isPrivate ? .dark : nil)
         .fullScreenCover(isPresented: $showTabs) {
@@ -490,8 +500,8 @@ struct BrowserPage: View {
             Spacer()
         }
         .padding(.horizontal, 20)
-        .padding(.top, 20)
-        .padding(.bottom, 100)
+        .padding(.top, 130)
+        .padding(.bottom, 110)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(uiColor: .systemBackground))
     }
