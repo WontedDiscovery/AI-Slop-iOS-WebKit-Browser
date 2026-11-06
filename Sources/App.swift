@@ -1775,8 +1775,6 @@ struct TabOverview: View {
     @State var privateMode = false
     @State var query = ""
     @State var knownCount = 0
-    // 捲動錨點：新增分頁後捲到這裡
-    static let bottomAnchorID = "tab-overview-bottom"
 
     init(isPresented: Binding<Bool>, model: BrowserModel, store: BrowserStore) {
         _isPresented = isPresented
@@ -1801,48 +1799,40 @@ struct TabOverview: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .bottom) {
-                ScrollView {
-                    if modeTabs.count > 3 {
-                        searchField
-                    }
-                    if visibleTabs.isEmpty {
-                        Text(privateMode ? "沒有私密分頁" : "沒有標籤頁")
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 120)
-                    }
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)],
-                              spacing: 22) {
-                        ForEach(visibleTabs) { tab in
-                            card(for: tab)
-                                .id(tab.id)
-                                .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 20)
-                    // 底部留白兼作捲動錨點：工具列不會遮住最後一排，捲到這裡就能看到最新的卡片
-                    Color.clear
-                        .frame(height: 120)
-                        .id(TabOverview.bottomAnchorID)
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                if modeTabs.count > 3 {
+                    searchField
                 }
-                bottomBar
-            }
-            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
-            .onAppear {
-                knownCount = model.tabs.count
-            }
-            // 新增分頁後：切到新分頁所屬的模式、清掉搜尋條件，再捲到底部
-            .onChange(of: model.tabs.count) { newCount in
-                let added = newCount > knownCount
-                knownCount = newCount
-                guard added, let newTab = model.tabs.last else { return }
-                query = ""
-                privateMode = newTab.isPrivate
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation { proxy.scrollTo(TabOverview.bottomAnchorID, anchor: .bottom) }
+                if visibleTabs.isEmpty {
+                    Text(privateMode ? "沒有私密分頁" : "沒有標籤頁")
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 120)
                 }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)],
+                          spacing: 22) {
+                    ForEach(visibleTabs) { tab in
+                        card(for: tab)
+                            .id(tab.id)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 20)
+                .padding(.bottom, 120)
+            }
+            bottomBar
+        }
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .onAppear {
+            knownCount = model.tabs.count
+        }
+        // 總覽裡多了分頁（按 + 新增、複製、重新開啟）就直接關閉總覽，進入新分頁
+        .onChange(of: model.tabs.count) { newCount in
+            let added = newCount > knownCount
+            knownCount = newCount
+            if added {
+                isPresented = false
             }
         }
     }
@@ -2047,7 +2037,10 @@ struct TabCard: View {
         } else if tab.url == nil {
             VStack(alignment: .leading, spacing: 10) {
                 Text("喜好項目").font(.caption.bold())
-                FavoritesGrid(links: favorites, iconSize: 36) { _ in }
+                FavoritesGrid(links: favorites, iconSize: 36) { url in
+                    tab.go(url)
+                    onSelect()
+                }
                 Spacer(minLength: 0)
             }
             .padding(12)
