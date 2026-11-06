@@ -501,6 +501,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private var observers: [NSKeyValueObservation] = []
     private var lastOffsetY: CGFloat = 0
     private var lastViewHeight: CGFloat = 0
+    private var lastEdgeCheck = Date.distantPast
+    private var edgeCheckRunning = false
+    private var topClearCount = 0
+    private var bottomClearCount = 0
     private var readerLoading = false
     private var readerOriginalURL: URL?
 
@@ -515,6 +519,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published var snapshot: UIImage?
     @Published var isSecure = false
     @Published var barsCollapsed = false
+    // 網頁頂端／底部（安全區範圍內）是否有需要點擊的固定元素。
+    // 預設保守：先保留安全區（黑邊），偵測到沒有才會讓網頁延伸過去
+    @Published var topNeedsSafeArea = true
+    @Published var bottomNeedsSafeArea = true
     @Published var isReader = false
     @Published var pageZoom: CGFloat = 1
 
@@ -601,10 +609,130 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             return
         }
         guard sv.isTracking || sv.isDecelerating else { return }
+        if Date().timeIntervalSince(lastEdgeCheck) > 0.6 {
+            checkEdges()
+        }
         if delta > 6, !barsCollapsed {
             withAnimation(.easeInOut(duration: 0.2)) { barsCollapsed = true }
         } else if delta < -6, barsCollapsed {
             withAnimation(.easeInOut(duration: 0.2)) { barsCollapsed = false }
+        }
+    }
+
+    // MARK: 安全區偵測（頂端／底部有沒有需要點擊的元素）
+
+    // 在網頁裡取樣頂端與底部安全區範圍，找出「固定或黏附（fixed／sticky）而且可以點擊」的元素。
+    // 一般會跟著內容捲走的連結不算，只有釘在畫面邊緣的導覽列、底部分頁列、Cookie 橫幅、聊天按鈕等才算。
+    // 回傳位元：1 = 頂端有、2 = 底部有；-1 = 偵測失敗
+    private static let edgeScript = #"""
+    function (topPts, bottomPts, widthPts) {
+      try {
+        var iw = window.innerWidth, ih = window.innerHeight;
+        if (!iw || !ih || !widthPts) { return 0; }
+        var k = iw / widthPts;
+        var zoneTop = topPts * k, zoneBottom = bottomPts * k;
+        var SEL = 'a[href],button,input:not([type=hidden]),select,textarea,summary,' +
+          '[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=switch],[role=option],[role=slider],' +
+          '[contenteditable=""],[contenteditable=true],[onclick]';
+        var clickCache = new Map(), pinCache = new Map();
+        function clickable(el) {
+          var v = clickCache.get(el);
+          if (v === undefined) {
+            v = false;
+            try {
+              v = el.tagName === 'IFRAME' || el.matches(SEL) || typeof el.onclick === 'function' ||
+                  getComputedStyle(el).cursor === 'pointer';
+            } catch (e) {}
+            clickCache.set(el, v);
+          }
+          return v;
+        }
+        function pinned(el) {
+          if (!el || el === document.body || el === document.documentElement) { return false; }
+          var v = pinCache.get(el);
+          if (v === undefined) {
+            var pos = '';
+            try { pos = getComputedStyle(el).position; } catch (e) {}
+            v = (pos === 'fixed' || pos === 'sticky') || pinned(el.parentElement);
+            pinCache.set(el, v);
+          }
+          return v;
+        }
+        function busy(y) {
+          var step = Math.max(16, iw / 20);
+          for (var x = step / 2; x < iw; x += step) {
+            var list = document.elementsFromPoint(x, y);
+            for (var i = 0; i < list.length; i++) {
+              var el = list[i];
+              if (el === document.documentElement || el === document.body) { continue; }
+              if (clickable(el) && pinned(el)) { return true; }
+            }
+          }
+          return false;
+        }
+        function scan(y0, y1) {
+          var rows = [y0, (y0 + y1) / 2, y1];
+          for (var r = 0; r < rows.length; r++) {
+            if (busy(rows[r])) { return true; }
+          }
+          return false;
+        }
+        var bits = 0;
+        if (zoneTop > 0.5 && scan(1, Math.max(1, zoneTop - 1))) { bits |= 1; }
+        if (zoneBottom > 0.5 && scan(Math.max(1, ih - zoneBottom + 1), ih - 1)) { bits |= 2; }
+        return bits;
+      } catch (e) {
+        return -1;
+      }
+    }
+    """#
+
+    func checkEdges() {
+        guard url != nil, !edgeCheckRunning, let window = web.window else { return }
+        edgeCheckRunning = true
+        lastEdgeCheck = Date()
+        let insets = window.safeAreaInsets
+        let script = "(\(BrowserTab.edgeScript))(\(Double(insets.top)), \(Double(insets.bottom)), \(Double(web.bounds.width)))"
+        web.evaluateJavaScript(script) { [weak self] result, _ in
+            guard let self else { return }
+            self.edgeCheckRunning = false
+            guard let bits = (result as? NSNumber)?.intValue, bits >= 0 else { return }
+            self.updateEdges(topBusy: bits & 1 != 0, bottomBusy: bits & 2 != 0)
+        }
+    }
+
+    // 有需要點擊的元素就立刻保留安全區；要連續兩次都偵測到沒有，才讓網頁延伸過去，避免來回閃動
+    private func updateEdges(topBusy: Bool, bottomBusy: Bool) {
+        var newTop = topNeedsSafeArea
+        var newBottom = bottomNeedsSafeArea
+        if topBusy {
+            topClearCount = 0
+            newTop = true
+        } else {
+            topClearCount += 1
+            if topClearCount >= 2 { newTop = false }
+        }
+        if bottomBusy {
+            bottomClearCount = 0
+            newBottom = true
+        } else {
+            bottomClearCount += 1
+            if bottomClearCount >= 2 { newBottom = false }
+        }
+        guard newTop != topNeedsSafeArea || newBottom != bottomNeedsSafeArea else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            topNeedsSafeArea = newTop
+            bottomNeedsSafeArea = newBottom
+        }
+    }
+
+    // 換頁時回到保守狀態，等新頁面偵測完再決定
+    private func resetEdgeDetection() {
+        topClearCount = 0
+        bottomClearCount = 0
+        if !topNeedsSafeArea || !bottomNeedsSafeArea {
+            topNeedsSafeArea = true
+            bottomNeedsSafeArea = true
         }
     }
 
@@ -811,6 +939,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     // MARK: WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        resetEdgeDetection()
         if readerLoading {
             readerLoading = false
         } else if isReader {
@@ -820,6 +949,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         onNavigated?()
+        // 載入完成後偵測一次，稍後再確認一次（網頁常在載入後才長出固定列）
+        checkEdges()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.checkEdges()
+        }
         guard !isPrivate, !isReader, webView.title != BrowserTab.errorTitle,
               let pageURL = webView.url,
               pageURL.scheme == "http" || pageURL.scheme == "https" else { return }
@@ -1335,14 +1469,26 @@ struct BrowserPage: View {
         tab.barsCollapsed && !addressFocused
     }
 
-    // 捲動收起工具列、而且已經載入網頁時，進入「隱藏安全區」的沉浸模式：
-    // 網頁延伸到狀態列與底部 Home 指示條的區域，並隱藏狀態列與 Home 指示條
-    private var immersive: Bool {
+    // 捲動收起工具列、而且已經載入網頁時，才有機會隱藏安全區。
+    // 頂端與底部分開判斷：該側沒有需要點擊的固定元素，網頁才會延伸到狀態列／Home 指示條的區域，
+    // 並隱藏狀態列／Home 指示條；有的話就保留那一側的安全區（黑邊），避免按鈕被擋住
+    private var pageFullScreen: Bool {
         barsHidden && tab.url != nil
     }
 
+    private var immersiveTop: Bool {
+        pageFullScreen && !tab.topNeedsSafeArea
+    }
+
+    private var immersiveBottom: Bool {
+        pageFullScreen && !tab.bottomNeedsSafeArea
+    }
+
     private var ignoredSafeAreaEdges: Edge.Set {
-        immersive ? [.top, .bottom] : []
+        var edges: Edge.Set = []
+        if immersiveTop { edges.insert(.top) }
+        if immersiveBottom { edges.insert(.bottom) }
+        return edges
     }
 
     private var showSuggestionList: Bool {
@@ -1436,8 +1582,8 @@ struct BrowserPage: View {
             .animation(.easeInOut(duration: 0.2), value: barsHidden)
             .animation(.default, value: downloads.banner)
         }
-        .statusBarHidden(immersive)
-        .persistentSystemOverlays(immersive ? .hidden : .automatic)
+        .statusBarHidden(immersiveTop)
+        .persistentSystemOverlays(immersiveBottom ? .hidden : .automatic)
     }
 
     // 捲動時收起工具列後，頂端只留一個小膠囊，點一下就恢復
