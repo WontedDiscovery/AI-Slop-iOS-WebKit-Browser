@@ -10,6 +10,44 @@ struct BrowserApp: App {
     }
 }
 
+// MARK: - Liquid Glass（iOS 26 以上使用；較舊系統退回半透明材質）
+
+extension View {
+    @ViewBuilder
+    func liquidGlass<S: Shape>(in shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(glassStyle(tint: tint, interactive: interactive), in: shape)
+        } else if let tint {
+            self.background(tint, in: shape)
+        } else {
+            self.background(.regularMaterial, in: shape)
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+private func glassStyle(tint: Color?, interactive: Bool) -> Glass {
+    var style: Glass = .regular
+    if let tint {
+        style = style.tint(tint)
+    }
+    if interactive {
+        style = style.interactive()
+    }
+    return style
+}
+
+@ViewBuilder
+func liquidGlassGroup<Content: View>(spacing: CGFloat, @ViewBuilder _ content: () -> Content) -> some View {
+    if #available(iOS 26.0, *) {
+        GlassEffectContainer(spacing: spacing) {
+            content()
+        }
+    } else {
+        content()
+    }
+}
+
 // 書籤與歷史紀錄共用的資料型態
 struct SavedLink: Codable, Identifiable {
     var id = UUID()
@@ -282,10 +320,17 @@ struct BrowserPage: View {
         tab.url?.absoluteString ?? ""
     }
 
+    private var displayHost: String {
+        guard let host = tab.url?.host else { return "搜尋或輸入網址" }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            addressBar
+            topBar
+            Divider()
             ProgressView(value: tab.progress)
+                .progressViewStyle(.linear)
                 .opacity(tab.isLoading ? 1 : 0)
             ZStack {
                 WebViewRepresentable(webView: tab.web)
@@ -293,6 +338,8 @@ struct BrowserPage: View {
                     startPage
                 }
             }
+        }
+        .overlay(alignment: .bottom) {
             bottomBar
         }
         .preferredColorScheme(tab.isPrivate ? .dark : nil)
@@ -309,24 +356,35 @@ struct BrowserPage: View {
         }
     }
 
-    // 空白分頁顯示的起始頁（喜好項目）
-    private var startPage: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("喜好項目").font(.title3.bold())
-            if store.bookmarks.isEmpty {
-                Text("加入書籤後會顯示在這裡").font(.footnote).foregroundStyle(.secondary)
-            }
-            FavoritesGrid(links: store.bookmarks, iconSize: 60) { tab.go($0) }
-            Spacer()
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(uiColor: .systemBackground))
-    }
-
-    private var addressBar: some View {
-        HStack(spacing: 10) {
+    // 頂部浮動膠囊：選單、網址與重新整理
+    private var topBar: some View {
+        HStack(spacing: 6) {
             Menu {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { _ = model.addTab() }
+                } label: {
+                    Label("新增分頁", systemImage: "plus.square")
+                }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { _ = model.addTab(isPrivate: true) }
+                } label: {
+                    Label("新增私密分頁", systemImage: "eye.slash")
+                }
+                Divider()
+                if !currentURL.isEmpty {
+                    Button {
+                        store.toggleBookmark(title: tab.title, url: currentURL)
+                    } label: {
+                        Label(store.isBookmarked(currentURL) ? "移除書籤" : "加入書籤",
+                              systemImage: store.isBookmarked(currentURL) ? "bookmark.slash" : "bookmark")
+                    }
+                }
+                Button {
+                    showHistory = true
+                } label: {
+                    Label("歷史紀錄", systemImage: "clock")
+                }
+                Divider()
                 Button {
                     tab.web.pageZoom = min(tab.web.pageZoom + 0.1, 2)
                 } label: {
@@ -340,135 +398,129 @@ struct BrowserPage: View {
                 Button {
                     tab.setDesktopMode(!tab.desktopMode)
                 } label: {
-                    Label(tab.desktopMode ? "請求行動版網站" : "請求桌面版網站",
-                          systemImage: "desktopcomputer")
+                    Label(tab.desktopMode ? "請求行動版網站" : "請求桌面版網站", systemImage: "desktopcomputer")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    model.clearBrowsingData()
+                } label: {
+                    Label("清除瀏覽資料", systemImage: "trash")
                 }
             } label: {
-                Text("aA").font(.system(size: 15, weight: .semibold))
+                symbolImage("line.3.horizontal")
             }
+            .buttonStyle(.plain)
 
-            HStack(spacing: 4) {
-                if tab.url?.scheme == "https" {
-                    Image(systemName: "lock.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            ZStack {
+                Text(displayHost)
+                    .font(.system(size: 17, weight: .semibold))
+                    .lineLimit(1)
+                    .opacity(addressFocused ? 0 : 1)
+                    .allowsHitTesting(false)
                 TextField("搜尋或輸入網址", text: $tab.address)
+                    .font(.system(size: 17, weight: .semibold))
+                    .multilineTextAlignment(.center)
                     .keyboardType(.webSearch)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.go)
                     .focused($addressFocused)
+                    .opacity(addressFocused ? 1 : 0)
                     .onSubmit {
                         tab.go(tab.address)
                         addressFocused = false
                     }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.gray.opacity(0.15)))
+            .frame(maxWidth: .infinity)
 
-            if addressFocused {
-                Button("取消") {
+            Button {
+                if addressFocused {
                     addressFocused = false
                     tab.address = currentURL
+                } else if tab.isLoading {
+                    tab.web.stopLoading()
+                } else {
+                    tab.web.reload()
                 }
-            } else {
-                Button {
-                    if tab.isLoading {
-                        tab.web.stopLoading()
-                    } else {
-                        tab.web.reload()
-                    }
-                } label: {
-                    Image(systemName: tab.isLoading ? "xmark" : "arrow.clockwise")
-                }
+            } label: {
+                symbolImage(addressFocused || tab.isLoading ? "xmark" : "arrow.clockwise")
             }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 6)
+        .frame(height: 48)
+        .liquidGlass(in: Capsule())
+        .padding(.horizontal, 14)
         .padding(.vertical, 8)
     }
 
+    // 底部浮動膠囊：上一頁、下一頁、分享、書籤與分頁
     private var bottomBar: some View {
         HStack {
-            Button { tab.web.goBack() } label: {
-                Image(systemName: "chevron.backward")
-            }
-            .disabled(!tab.canGoBack)
+            navButton("chevron.backward") { tab.web.goBack() }
+                .disabled(!tab.canGoBack)
             Spacer()
-            Button { tab.web.goForward() } label: {
-                Image(systemName: "chevron.forward")
-            }
-            .disabled(!tab.canGoForward)
+            navButton("chevron.forward") { tab.web.goForward() }
+                .disabled(!tab.canGoForward)
             Spacer()
             shareButton
             Spacer()
-            Button { showBookmarks = true } label: {
-                Image(systemName: "book")
-            }
+            navButton("book") { showBookmarks = true }
             Spacer()
-            Button {
+            navButton("square.on.square") {
                 tab.captureSnapshot()
                 showTabs = true
-            } label: {
-                Image(systemName: "square.on.square")
-                    .overlay(Text("\(model.tabs.count)").font(.system(size: 11, weight: .bold)))
             }
-            Spacer()
-            moreMenu
         }
-        .font(.system(size: 19))
+        .padding(.horizontal, 22)
+        .frame(height: 60)
+        .liquidGlass(in: Capsule(), interactive: true)
         .padding(.horizontal, 24)
-        .padding(.vertical, 10)
-        .background(.bar)
+        .padding(.bottom, 6)
+    }
+
+    // 空白分頁顯示的起始頁（喜好項目）
+    private var startPage: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("喜好項目").font(.title3.bold())
+            if store.bookmarks.isEmpty {
+                Text("加入書籤後會顯示在這裡").font(.footnote).foregroundStyle(.secondary)
+            }
+            FavoritesGrid(links: store.bookmarks, iconSize: 60) { tab.go($0) }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 100)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(uiColor: .systemBackground))
     }
 
     @ViewBuilder
     private var shareButton: some View {
         if let url = tab.url {
             ShareLink(item: url) {
-                Image(systemName: "square.and.arrow.up")
+                symbolImage("square.and.arrow.up")
             }
         } else {
-            Image(systemName: "square.and.arrow.up")
+            symbolImage("square.and.arrow.up")
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var moreMenu: some View {
-        Menu {
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) { _ = model.addTab() }
-            } label: {
-                Label("新增分頁", systemImage: "plus.square")
-            }
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) { _ = model.addTab(isPrivate: true) }
-            } label: {
-                Label("新增私密分頁", systemImage: "eye.slash")
-            }
-            if !currentURL.isEmpty {
-                Button {
-                    store.toggleBookmark(title: tab.title, url: currentURL)
-                } label: {
-                    Label(store.isBookmarked(currentURL) ? "移除書籤" : "加入書籤",
-                          systemImage: store.isBookmarked(currentURL) ? "bookmark.slash" : "bookmark")
-                }
-            }
-            Button {
-                showHistory = true
-            } label: {
-                Label("歷史紀錄", systemImage: "clock")
-            }
-            Divider()
-            Button(role: .destructive) {
-                model.clearBrowsingData()
-            } label: {
-                Label("清除瀏覽資料", systemImage: "trash")
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
+    private func navButton(_ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            symbolImage(icon)
         }
+        .buttonStyle(.plain)
+    }
+
+    private func symbolImage(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 20, weight: .medium))
+            .foregroundStyle(.primary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 }
 
@@ -526,39 +578,43 @@ struct TabOverview: View {
     }
 
     private func bottomBar(_ proxy: ScrollViewProxy) -> some View {
-        HStack(spacing: 14) {
-            Button {
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
-                    _ = model.addTab(isPrivate: privateMode)
-                }
-                if let id = visibleTabs.last?.id {
-                    DispatchQueue.main.async {
-                        withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+        liquidGlassGroup(spacing: 14) {
+            HStack(spacing: 14) {
+                Button {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                        _ = model.addTab(isPrivate: privateMode)
                     }
+                    if let id = visibleTabs.last?.id {
+                        DispatchQueue.main.async {
+                            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 56, height: 56)
+                        .liquidGlass(in: Circle(), interactive: true)
                 }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 56, height: 56)
-                    .background(.regularMaterial, in: Circle())
-            }
+                .buttonStyle(.plain)
 
-            HStack(spacing: 0) {
-                segment("私密瀏覽", isOn: privateMode) { privateMode = true }
-                segment("\(normalCount) 個標籤頁", isOn: !privateMode) { privateMode = false }
-            }
-            .padding(4)
-            .background(.regularMaterial, in: Capsule())
+                HStack(spacing: 0) {
+                    segment("私密瀏覽", isOn: privateMode) { privateMode = true }
+                    segment("\(normalCount) 個標籤頁", isOn: !privateMode) { privateMode = false }
+                }
+                .padding(4)
+                .liquidGlass(in: Capsule(), interactive: true)
 
-            Button {
-                isPresented = false
-            } label: {
-                Image(systemName: "checkmark")
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .background(Color.blue, in: Circle())
+                Button {
+                    isPresented = false
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 56, height: 56)
+                        .liquidGlass(in: Circle(), tint: .blue, interactive: true)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 20)
@@ -574,7 +630,7 @@ struct TabOverview: View {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .background(isOn ? Color.gray.opacity(0.35) : Color.clear, in: Capsule())
+                .background(isOn ? Color.primary.opacity(0.14) : Color.clear, in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -599,10 +655,11 @@ struct TabCard: View {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(7)
-                        .background(Color.black.opacity(0.45), in: Circle())
+                        .foregroundStyle(.primary)
+                        .padding(8)
+                        .liquidGlass(in: Circle(), interactive: true)
                 }
+                .buttonStyle(.plain)
                 .padding(8)
             }
             HStack(spacing: 6) {
