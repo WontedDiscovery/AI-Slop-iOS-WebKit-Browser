@@ -1775,6 +1775,8 @@ struct TabOverview: View {
     @State var privateMode = false
     @State var query = ""
     @State var knownCount = 0
+    // 捲動錨點：新增分頁後捲到這裡
+    static let bottomAnchorID = "tab-overview-bottom"
 
     init(isPresented: Binding<Bool>, model: BrowserModel, store: BrowserStore) {
         _isPresented = isPresented
@@ -1820,7 +1822,10 @@ struct TabOverview: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 20)
-                    .padding(.bottom, 120)
+                    // 底部留白兼作捲動錨點：工具列不會遮住最後一排，捲到這裡就能看到最新的卡片
+                    Color.clear
+                        .frame(height: 120)
+                        .id(TabOverview.bottomAnchorID)
                 }
                 bottomBar
             }
@@ -1828,13 +1833,15 @@ struct TabOverview: View {
             .onAppear {
                 knownCount = model.tabs.count
             }
-            // 新增分頁後，等卡片真的出現在畫面上再捲動過去
+            // 新增分頁後：切到新分頁所屬的模式、清掉搜尋條件，再捲到底部
             .onChange(of: model.tabs.count) { newCount in
                 let added = newCount > knownCount
                 knownCount = newCount
-                guard added, let id = visibleTabs.last?.id else { return }
+                guard added, let newTab = model.tabs.last else { return }
+                query = ""
+                privateMode = newTab.isPrivate
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+                    withAnimation { proxy.scrollTo(TabOverview.bottomAnchorID, anchor: .bottom) }
                 }
             }
         }
@@ -1965,61 +1972,69 @@ struct TabCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topTrailing) {
+            // 預覽圖是一顆按鈕：點一下切換到此分頁，長按有更多選項
+            Button(action: onSelect) {
                 preview
                     .frame(maxWidth: .infinity, minHeight: 260, maxHeight: 260)
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .contentShape(Rectangle())
-                    .onTapGesture(perform: onSelect)
-                    .contextMenu {
-                        Button {
-                            onDuplicate()
-                        } label: {
-                            Label("複製分頁", systemImage: "plus.square.on.square")
-                        }
-                        if tab.url != nil {
-                            Button {
-                                onBookmark()
-                            } label: {
-                                Label("加入或移除書籤", systemImage: "bookmark")
-                            }
-                            Button {
-                                tab.sharePage()
-                            } label: {
-                                Label("分享", systemImage: "square.and.arrow.up")
-                            }
-                        }
-                        Button {
-                            onCloseOthers()
-                        } label: {
-                            Label("關閉其他分頁", systemImage: "xmark.square")
-                        }
-                        Button(role: .destructive) {
-                            onClose()
-                        } label: {
-                            Label("關閉分頁", systemImage: "xmark")
-                        }
-                    }
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.primary)
-                        .padding(8)
-                        .liquidGlass(in: Circle(), interactive: true)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button {
+                    onDuplicate()
+                } label: {
+                    Label("複製分頁", systemImage: "plus.square.on.square")
                 }
-                .buttonStyle(.plain)
-                .padding(8)
+                if tab.url != nil {
+                    Button {
+                        onBookmark()
+                    } label: {
+                        Label("加入或移除書籤", systemImage: "bookmark")
+                    }
+                    Button {
+                        tab.sharePage()
+                    } label: {
+                        Label("分享", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Button {
+                    onCloseOthers()
+                } label: {
+                    Label("關閉其他分頁", systemImage: "xmark.square")
+                }
+                Button(role: .destructive) {
+                    onClose()
+                } label: {
+                    Label("關閉分頁", systemImage: "xmark")
+                }
             }
-            HStack(spacing: 6) {
-                Image(systemName: tab.url == nil ? "square.grid.2x2" : "globe")
-                Text(tab.title).lineLimit(1)
+
+            Button(action: onSelect) {
+                HStack(spacing: 6) {
+                    Image(systemName: tab.url == nil ? "square.grid.2x2" : "globe")
+                    Text(tab.title).lineLimit(1)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onSelect)
+            .buttonStyle(.plain)
+        }
+        // 關閉鈕是覆蓋在卡片右上角的獨立按鈕，不與預覽圖的按鈕共用同一個手勢容器
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .padding(8)
+                    .liquidGlass(in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(8)
         }
     }
 
