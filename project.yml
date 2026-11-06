@@ -1,0 +1,24 @@
+name: Browser
+options:
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Browser:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.browser
+        PRODUCT_NAME: Browser
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: 瀏覽器
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+schemes:
+  Browser:
+    build:
+      targets:
+        Browser: all
