@@ -252,7 +252,13 @@ struct BrowserPage: View {
     @State var showTabs = false
     @State var showBookmarks = false
     @State var showHistory = false
-    @FocusState var addressFocused = false
+    @FocusState var addressFocused: Bool
+
+    init(model: BrowserModel, tab: BrowserTab, store: BrowserStore) {
+        _model = ObservedObject(wrappedValue: model)
+        _tab = ObservedObject(wrappedValue: tab)
+        _store = ObservedObject(wrappedValue: store)
+    }
 
     private var currentURL: String {
         tab.url?.absoluteString ?? ""
