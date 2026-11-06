@@ -1522,18 +1522,7 @@ struct BrowserPage: View {
 
     private var addressField: some View {
         ZStack {
-            HStack(spacing: 4) {
-                if tab.isReader {
-                    Image(systemName: "doc.plaintext")
-                        .font(.system(size: 13))
-                }
-                securityIcon
-                Text(displayHost)
-                    .font(.system(size: 17, weight: .semibold))
-                    .lineLimit(1)
-            }
-            .opacity(addressFocused ? 0 : 1)
-            .allowsHitTesting(false)
+            // 輸入用的欄位：只在編輯時接收觸控，由下方的顯示層點一下來啟動
             TextField("搜尋或輸入網址", text: $tab.address)
                 .font(.system(size: 17, weight: .semibold))
                 .multilineTextAlignment(.center)
@@ -1543,13 +1532,31 @@ struct BrowserPage: View {
                 .submitLabel(.go)
                 .focused($addressFocused)
                 .opacity(addressFocused ? 1 : 0)
+                .allowsHitTesting(addressFocused)
                 .onSubmit {
                     tab.go(tab.address)
                     addressFocused = false
                 }
+            if !addressFocused {
+                HStack(spacing: 4) {
+                    if tab.isReader {
+                        Image(systemName: "doc.plaintext")
+                            .font(.system(size: 13))
+                    }
+                    securityIcon
+                    Text(displayHost)
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    addressFocused = true
+                }
+                .gesture(swipeGesture)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .gesture(swipeGesture, including: addressFocused ? .subviews : .all)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // 在網址列上左右滑動切換分頁；在最後一個分頁往左滑會新增分頁
