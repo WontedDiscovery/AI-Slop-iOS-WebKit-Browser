@@ -114,6 +114,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     let isPrivate: Bool
     let web: WKWebView
     var onOpenTab: ((BrowserTab) -> Void)?
+    var onClose: ((BrowserTab) -> Void)?
     private let store: BrowserStore
     private var observers: [NSKeyValueObservation] = []
 
@@ -209,6 +210,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
     }
 
+    // 分頁被關閉時，停止載入，避免背景繼續跑
+    func teardown() {
+        web.stopLoading()
+    }
+
+    // 網頁呼叫 window.close() 時關閉這個分頁
+    func webViewDidClose(_ webView: WKWebView) {
+        onClose?(self)
+    }
+
     func setDesktopMode(_ on: Bool) {
         desktopMode = on
         web.reload()
@@ -266,12 +277,17 @@ final class BrowserModel: ObservableObject {
     // 關閉分頁，卡片會以動畫移除
     func closeTab(_ tab: BrowserTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        let wasSelected = (selectedID == tab.id)
+        tab.teardown()
         withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
             tabs.remove(at: index)
             if tabs.isEmpty {
                 addTab()
-            } else if !tabs.contains(where: { $0.id == selectedID }) {
-                selectedID = tabs.last?.id
+            } else if wasSelected || !tabs.contains(where: { $0.id == selectedID }) {
+                // 優先選擇相鄰、同類型（一般／私密）的分頁
+                let after = tabs[index...].first { $0.isPrivate == tab.isPrivate }
+                let before = tabs[..<index].last { $0.isPrivate == tab.isPrivate }
+                selectedID = (after ?? before ?? tabs.last)?.id
             }
         }
     }
@@ -286,6 +302,7 @@ final class BrowserModel: ObservableObject {
 
     private func attach(_ tab: BrowserTab) {
         tab.onOpenTab = { [weak self] newTab in self?.attach(newTab) }
+        tab.onClose = { [weak self] closing in self?.closeTab(closing) }
         tabs.append(tab)
         selectedID = tab.id
     }
@@ -297,8 +314,6 @@ struct ContentView: View {
     var body: some View {
         if let tab = model.current {
             BrowserPage(model: model, tab: tab, store: model.store)
-                .id(tab.id)
-                .transition(.opacity)
         }
     }
 }
@@ -353,6 +368,7 @@ struct BrowserPage: View {
             }
         }
         .preferredColorScheme(tab.isPrivate ? .dark : nil)
+        .onChange(of: tab.id) { _ in addressFocused = false }
         .fullScreenCover(isPresented: $showTabs) {
             TabOverview(isPresented: $showTabs, model: model, store: store)
         }
@@ -584,6 +600,13 @@ struct TabOverview: View {
                 bottomBar(proxy)
             }
             .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            // 新增分頁後，等卡片真的出現在畫面上再捲動過去
+            .onChange(of: model.tabs.count) { _ in
+                guard let id = visibleTabs.last?.id else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+                }
+            }
         }
     }
 
@@ -593,11 +616,6 @@ struct TabOverview: View {
                 Button {
                     withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
                         _ = model.addTab(isPrivate: privateMode)
-                    }
-                    if let id = visibleTabs.last?.id {
-                        DispatchQueue.main.async {
-                            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
-                        }
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -780,9 +798,33 @@ struct LinkListSheet: View {
     }
 }
 
+// 用容器包住 WKWebView：切換分頁時，updateUIView 會把新的 WKWebView 換進來
 struct WebViewRepresentable: UIViewRepresentable {
     let webView: WKWebView
 
-    func makeUIView(context: Context) -> WKWebView { webView }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .clear
+        mount(webView, in: container)
+        return container
+    }
+
+    func updateUIView(_ container: UIView, context: Context) {
+        if container.subviews.first !== webView {
+            mount(webView, in: container)
+        }
+    }
+
+    private func mount(_ web: WKWebView, in container: UIView) {
+        container.subviews.forEach { $0.removeFromSuperview() }
+        web.removeFromSuperview()
+        web.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(web)
+        NSLayoutConstraint.activate([
+            web.topAnchor.constraint(equalTo: container.topAnchor),
+            web.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            web.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            web.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+    }
 }
