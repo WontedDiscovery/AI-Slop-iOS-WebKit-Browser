@@ -500,6 +500,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private let store: BrowserStore
     private var observers: [NSKeyValueObservation] = []
     private var lastOffsetY: CGFloat = 0
+    private var lastViewHeight: CGFloat = 0
     private var readerLoading = false
     private var readerOriginalURL: URL?
 
@@ -543,6 +544,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         web.isFindInteractionEnabled = true
         // 網頁只佔據上下工具列之間的區域（見 BrowserPage.mainStack），這裡只留一點邊距
         web.scrollView.contentInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        // 工具列收起後網頁會延伸到安全區底下；不要讓 WebKit 自動依安全區再縮排一次
+        web.scrollView.contentInsetAdjustmentBehavior = .never
         ContentBlocker.apply(to: web, enabled: Prefs.blockTrackers)
 
         // 下拉重新整理
@@ -585,16 +588,23 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         let y = sv.contentOffset.y
         let delta = y - lastOffsetY
         lastOffsetY = y
+        // 工具列收合／展開、安全區隱藏會改變網頁區高度，這時的位移不是使用者捲動造成的，直接略過
+        let height = sv.bounds.height
+        let resized = abs(height - lastViewHeight) > 0.5
+        lastViewHeight = height
+        if resized { return }
         let topY = -sv.adjustedContentInset.top
         if y <= topY + 30 {
-            if barsCollapsed { barsCollapsed = false }
+            if barsCollapsed {
+                withAnimation(.easeInOut(duration: 0.2)) { barsCollapsed = false }
+            }
             return
         }
         guard sv.isTracking || sv.isDecelerating else { return }
         if delta > 6, !barsCollapsed {
-            barsCollapsed = true
+            withAnimation(.easeInOut(duration: 0.2)) { barsCollapsed = true }
         } else if delta < -6, barsCollapsed {
-            barsCollapsed = false
+            withAnimation(.easeInOut(duration: 0.2)) { barsCollapsed = false }
         }
     }
 
@@ -1325,6 +1335,16 @@ struct BrowserPage: View {
         tab.barsCollapsed && !addressFocused
     }
 
+    // 捲動收起工具列、而且已經載入網頁時，進入「隱藏安全區」的沉浸模式：
+    // 網頁延伸到狀態列與底部 Home 指示條的區域，並隱藏狀態列與 Home 指示條
+    private var immersive: Bool {
+        barsHidden && tab.url != nil
+    }
+
+    private var ignoredSafeAreaEdges: Edge.Set {
+        immersive ? [.top, .bottom] : []
+    }
+
     private var showSuggestionList: Bool {
         addressFocused && edited && !tab.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -1373,8 +1393,24 @@ struct BrowserPage: View {
     }
 
     private var mainStack: some View {
-        VStack(spacing: 0) {
-            // 上方工具列區：網址列與載入進度條（收合時換成小膠囊）
+        // 網頁區：一般狀態只佔據上下工具列之間的空間，固定或黏附在邊緣的網頁元素也不會被工具列遮住；
+        // 沉浸模式（捲動收起工具列）時延伸到上下安全區，工具列則浮在網頁上方
+        ZStack {
+            WebViewRepresentable(webView: tab.web)
+            if tab.url == nil {
+                startPage
+            }
+            if showSuggestionList {
+                SuggestionList(query: tab.address, local: suggestions.local, remote: suggestions.remote) { picked in
+                    tab.go(picked)
+                    addressFocused = false
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: ignoredSafeAreaEdges)
+        // 上方工具列區：網址列與載入進度條（收合時換成小膠囊）
+        .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if barsHidden {
                     compactBar
@@ -1387,23 +1423,9 @@ struct BrowserPage: View {
                     .allowsHitTesting(false)
             }
             .animation(.easeInOut(duration: 0.2), value: barsHidden)
-
-            // 網頁區：只佔據上下工具列之間的空間，固定或黏附在邊緣的網頁元素也不會被工具列遮住
-            ZStack {
-                WebViewRepresentable(webView: tab.web)
-                if tab.url == nil {
-                    startPage
-                }
-                if showSuggestionList {
-                    SuggestionList(query: tab.address, local: suggestions.local, remote: suggestions.remote) { picked in
-                        tab.go(picked)
-                        addressFocused = false
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // 下方工具列區：下載提示與底部工具列（收合時隱藏）
+        }
+        // 下方工具列區：下載提示與底部工具列（收合時隱藏）
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 8) {
                 downloadBanner
                 if !barsHidden {
@@ -1414,6 +1436,8 @@ struct BrowserPage: View {
             .animation(.easeInOut(duration: 0.2), value: barsHidden)
             .animation(.default, value: downloads.banner)
         }
+        .statusBarHidden(immersive)
+        .persistentSystemOverlays(immersive ? .hidden : .automatic)
     }
 
     // 捲動時收起工具列後，頂端只留一個小膠囊，點一下就恢復
