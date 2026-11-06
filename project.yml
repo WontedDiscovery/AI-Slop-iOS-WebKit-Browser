@@ -16,6 +16,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: 瀏覽器
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_NSCameraUsageDescription: 網頁需要使用相機時會詢問你
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: 網頁需要使用麥克風時會詢問你
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: 網頁需要你的位置時會詢問你
         SWIFT_VERSION: "5.0"
 schemes:
   Browser:
